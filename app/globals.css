@@ -1,0 +1,176 @@
+:root {
+  /* typography */
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "Quicksand", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, "SF Mono", monospace;
+
+  /* dark theme — full black bg, white text */
+  --void: #000000;
+  --panel: #0b0b0b;
+  --panel-raised: #161616;
+  --seam: #262626;
+  --cream: #ffffff;
+  --cream-dim: #b3b3b3;
+  --cream-faint: #6c6c6c;
+  --amber: #ffffff;
+  --amber-deep: #7d7d7d;
+  --amber-glow: #ffffff;
+  --record: #000000;
+  --paper: #e6e6e6;
+  --paper-edge: #bcbcbc;
+  --paper-ink: #0a0a0a;
+  --paper-ink-dim: #5c5c5c;
+  --vinyl-a: #0d0d0d;
+  --vinyl-b: #2c2c2c;
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --accent-tint: rgba(255, 255, 255, 0.08);
+  --window-bg: #040404;
+  --window-glow: rgba(255, 255, 255, 0.05);
+  --device-glow: rgba(255, 255, 255, 0.06);
+  --accent-glow-ring: rgba(255, 255, 255, 0.3);
+  --button-glow: rgba(255, 255, 255, 0.35);
+  --vignette: rgba(0, 0, 0, 0.45);
+  --bg-glow-a: rgba(255, 255, 255, 0.05);
+  --bg-glow-b: rgba(255, 255, 255, 0.02);
+  --bg-glow-c: rgba(255, 255, 255, 0.03);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --void: #ffffff;
+    --panel: #f4f4f4;
+    --panel-raised: #ebebeb;
+    --seam: #d8d8d8;
+    --cream: #111111;
+    --cream-dim: #4d4d4d;
+    --cream-faint: #8f8f8f;
+    --amber: #000000;
+    --amber-deep: #555555;
+    --amber-glow: #000000;
+    --record: #e2e2e2;
+    --paper: #1a1a1a;
+    --paper-edge: #000000;
+    --paper-ink: #ffffff;
+    --paper-ink-dim: #b0b0b0;
+    --vinyl-a: #d6d6d6;
+    --vinyl-b: #b8b8b8;
+    --hover-bg: rgba(0, 0, 0, 0.06);
+    --accent-tint: rgba(0, 0, 0, 0.06);
+    --window-bg: #fafafa;
+    --window-glow: rgba(0, 0, 0, 0.06);
+    --device-glow: rgba(0, 0, 0, 0.12);
+    --accent-glow-ring: rgba(0, 0, 0, 0.25);
+    --button-glow: rgba(0, 0, 0, 0.35);
+    --vignette: rgba(0, 0, 0, 0.05);
+    --bg-glow-a: rgba(0, 0, 0, 0.03);
+    --bg-glow-b: rgba(0, 0, 0, 0.02);
+    --bg-glow-c: rgba(0, 0, 0, 0.02);
+  }
+}
+
+/* light theme — full white bg, black text */
+:root[data-theme="light"] {
+  --void: #ffffff;
+  --panel: #f4f4f4;
+  --panel-raised: #ebebeb;
+  --seam: #d8d8d8;
+  --cream: #111111;
+  --cream-dim: #4d4d4d;
+  --cream-faint: #8f8f8f;
+  --amber: #000000;
+  --amber-deep: #555555;
+  --amber-glow: #000000;
+  --record: #e2e2e2;
+  --paper: #1a1a1a;
+  --paper-edge: #000000;
+  --paper-ink: #ffffff;
+  --paper-ink-dim: #b0b0b0;
+  --vinyl-a: #d6d6d6;
+  --vinyl-b: #b8b8b8;
+  --hover-bg: rgba(0, 0, 0, 0.06);
+  --accent-tint: rgba(0, 0, 0, 0.06);
+  --window-bg: #fafafa;
+  --window-glow: rgba(0, 0, 0, 0.06);
+  --device-glow: rgba(0, 0, 0, 0.12);
+  --accent-glow-ring: rgba(0, 0, 0, 0.25);
+  --button-glow: rgba(0, 0, 0, 0.35);
+  --vignette: rgba(0, 0, 0, 0.05);
+  --bg-glow-a: rgba(0, 0, 0, 0.03);
+  --bg-glow-b: rgba(0, 0, 0, 0.02);
+  --bg-glow-c: rgba(0, 0, 0, 0.02);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--void);
+  color: var(--cream);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  min-height: 100vh;
+  position: relative;
+  background-image:
+    radial-gradient(ellipse 60% 40% at 50% 8%, var(--bg-glow-a), transparent 60%),
+    radial-gradient(ellipse 80% 60% at 15% 95%, var(--bg-glow-b), transparent 65%),
+    radial-gradient(ellipse 70% 50% at 100% 85%, var(--bg-glow-c), transparent 60%);
+}
+
+/* film-grain overlay, sits above the gradients, under the content */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* soft vignette to pull focus to the center */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, transparent 40%, var(--vignette) 100%);
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--amber);
+  color: var(--void);
+}
+
+button:focus-visible,
+[role="button"]:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--amber-glow);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
