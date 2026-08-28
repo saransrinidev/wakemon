@@ -14,7 +14,6 @@ resolved with yt-dlp when ytmusicapi returns an unsigned signatureCipher
 """
 
 import os
-import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -179,8 +178,11 @@ def stream(video_id: str):
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
 
-    print("WAKEMON music backend listening on http://127.0.0.1:8787")
-    time.sleep(0.2)
-    uvicorn.run(app, host="127.0.0.1", port=8787)
+    port = int(os.environ.get("PORT", "8787"))
+    host = os.environ.get("HOST", "0.0.0.0")
+    print(f"WAKEMON music backend listening on http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port)

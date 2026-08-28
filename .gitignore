@@ -1,15 +1,15 @@
 # dependencies
-/node_modules
-/.pnp
+node_modules/
+.pnp
 .pnp.js
 
 # next.js
-/.next/
-/out/
-/build
+.next/
+out/
+build
 
 # production
-/dist
+dist
 
 # misc
 .DS_Store
