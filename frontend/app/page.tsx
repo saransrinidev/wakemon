@@ -16,7 +16,7 @@ const MAX_RESULTS = 12;
 const LANGS = {
   en: {
     name: "English",
-    brand: "INIYAN",
+    brand: "WAKEMON",
     tagline: "radio — search, play, unwind",
     nowPlaying: "NOW PLAYING",
     search: "SEARCH",
@@ -34,7 +34,7 @@ const LANGS = {
   },
   hi: {
     name: "हिन्दी",
-    brand: "INIYAN",
+    brand: "WAKEMON",
     tagline: "रेडियो — खोजें, चलाएं",
     nowPlaying: "अभी बज रहा है",
     search: "खोजें",
@@ -52,7 +52,7 @@ const LANGS = {
   },
   ja: {
     name: "日本語",
-    brand: "INIYAN",
+    brand: "WAKEMON",
     tagline: "ラジオ — 検索・再生",
     nowPlaying: "再生中",
     search: "検索",
@@ -70,7 +70,7 @@ const LANGS = {
   },
   es: {
     name: "Español",
-    brand: "INIYAN",
+    brand: "WAKEMON",
     tagline: "radio — busca, reproduce",
     nowPlaying: "SONANDO AHORA",
     search: "BUSCAR",
@@ -88,7 +88,7 @@ const LANGS = {
   },
   fr: {
     name: "Français",
-    brand: "INIYAN",
+    brand: "WAKEMON",
     tagline: "radio — cherchez, jouez",
     nowPlaying: "EN LECTURE",
     search: "RECHERCHER",
@@ -247,7 +247,7 @@ export default function Page() {
   }
 
   useEffect(() => {
-    const stored = localStorage.getItem("iniyan-theme");
+    const stored = localStorage.getItem("wakemon-theme");
     const saved: "dark" | "light" =
       stored === "dark" || stored === "light"
         ? stored
@@ -264,7 +264,7 @@ export default function Page() {
       return;
     }
     document.documentElement.setAttribute("data-theme", theme);
-    localStorage.setItem("iniyan-theme", theme);
+    localStorage.setItem("wakemon-theme", theme);
   }, [theme]);
 
   useEffect(() => {
@@ -304,7 +304,7 @@ export default function Page() {
         ))}
       </div>
 
-      <div className="device" role="group" aria-label="Iniyan music player">
+      <div className="device" role="group" aria-label="Wakemon music player">
         <header className="brandRow">
           <div className="brand">
             <span className="brandMark" aria-hidden="true" />
@@ -375,7 +375,7 @@ export default function Page() {
           <div className="platter" aria-hidden="true">
             <div className={"vinyl" + (isPlaying ? " spinning" : "")}>
               <div className="vinylLabel">
-                <span className="vinylLabelText">IN</span>
+                <span className="vinylLabelText">WK</span>
               </div>
             </div>
             <div className={"tonearm" + (isPlaying ? " down" : "")} />

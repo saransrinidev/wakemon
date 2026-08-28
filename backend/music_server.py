@@ -1,4 +1,4 @@
-"""INIYAN music backend — YTMusic (ytmusicapi) wrapper.
+"""WAKEMON music backend — YTMusic (ytmusicapi) wrapper.
 
 Run with:
     pip install -r requirements.txt
@@ -24,7 +24,7 @@ from ytmusicapi import YTMusic
 
 AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "headers_auth.json")
 
-app = FastAPI(title="INIYAN music backend")
+app = FastAPI(title="WAKEMON music backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -245,5 +245,5 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", "8787"))
     host = os.environ.get("HOST", "0.0.0.0")
-    print(f"INIYAN music backend listening on http://{host}:{port}")
+    print(f"WAKEMON music backend listening on http://{host}:{port}")
     uvicorn.run(app, host=host, port=port)
