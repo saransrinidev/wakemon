@@ -15,8 +15,10 @@ resolved with yt-dlp when ytmusicapi returns an unsigned signatureCipher
 
 import os
 
-from fastapi import FastAPI, HTTPException
+import requests
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from ytmusicapi import YTMusic
 
@@ -137,8 +139,8 @@ def _resolve_with_ytdlp(video_id: str) -> tuple[str, str, int]:
     return url, info.get("title") or "Song", int(info.get("duration") or 0)
 
 
-@app.get("/api/stream/{video_id}")
-def stream(video_id: str):
+def _resolve_stream(video_id: str) -> tuple[str, str, str, int]:
+    """Return (stream_url, title, artist, duration)."""
     stream_url = None
     title = "Song"
     artist = "Unknown artist"
@@ -168,6 +170,12 @@ def stream(video_id: str):
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(404, f"Unable to obtain an audio stream: {exc}") from exc
 
+    return stream_url, title, artist, duration
+
+
+@app.get("/api/stream/{video_id}")
+def stream(video_id: str):
+    stream_url, title, artist, duration = _resolve_stream(video_id)
     return {
         "url": stream_url,
         "id": video_id,
@@ -175,6 +183,59 @@ def stream(video_id: str):
         "artist": artist,
         "duration": duration,
     }
+
+
+def _yt_headers() -> dict[str, str]:
+    return {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Referer": "https://music.youtube.com/",
+        "Origin": "https://music.youtube.com",
+    }
+
+
+@app.get("/api/audio/{video_id}")
+def audio(video_id: str, range: str | None = Header(default=None)):
+    """Proxy the raw audio bytes so playback happens through this server.
+
+    The stream URLs resolved by ytmusicapi/yt-dlp are signed for the machine
+    that resolved them. Browsers cannot play them directly from a client IP,
+    so we fetch upstream server-side and stream the bytes back.
+    """
+    stream_url, _title, _artist, _duration = _resolve_stream(video_id)
+
+    headers = _yt_headers()
+    if range:
+        headers["Range"] = range
+
+    try:
+        upstream = requests.get(stream_url, headers=headers, stream=True, timeout=30)
+    except requests.RequestException as exc:
+        raise HTTPException(502, f"Could not reach audio stream: {exc}") from exc
+
+    if upstream.status_code >= 400:
+        upstream.close()
+        raise HTTPException(502, f"Audio upstream returned HTTP {upstream.status_code}")
+
+    resp_headers = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-cache",
+    }
+    content_range = upstream.headers.get("Content-Range")
+    if content_range:
+        resp_headers["Content-Range"] = content_range
+    content_type = upstream.headers.get("Content-Type")
+    if not content_type:
+        content_type = "audio/mpeg"
+
+    return StreamingResponse(
+        upstream.iter_content(chunk_size=64 * 1024),
+        status_code=upstream.status_code,
+        media_type=content_type,
+        headers=resp_headers,
+    )
 
 
 if __name__ == "__main__":

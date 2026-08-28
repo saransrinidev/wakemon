@@ -184,7 +184,7 @@ export default function Page() {
       const data = await res.json();
       const audio = audioRef.current;
       if (!audio) return;
-      audio.src = data.url;
+      audio.src = `/api/audio/${track.id}`;
       audio.currentTime = 0;
       if (data.duration) {
         setCurrent((c) => (c && c.id === track.id ? { ...c, duration: data.duration } : c));
