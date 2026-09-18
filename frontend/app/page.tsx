@@ -12,6 +12,8 @@ type Track = {
 
 const DEFAULT_QUERY = "lofi hip hop radio beats";
 const MAX_RESULTS = 12;
+const GENRES = ["lofi", "jazz", "chill", "instrumental", "study", "focus", "synthwave"];
+const SLEEP_OPTS = [0, 5, 10, 30];
 
 const LANGS = {
   en: {
@@ -24,8 +26,8 @@ const LANGS = {
     go: "GO",
     loading: "…",
     noResults: "Nothing found — try a different search.",
-    shuffle: "SHUFFLE",
-    repeat: "REPEAT",
+    shuffle: "Shuffle",
+    repeat: "Repeat",
     vol: "VOL",
     play: "Play",
     pause: "Pause",
@@ -115,6 +117,16 @@ function formatTime(s: number) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+function withToken(url: string) {
+  const token = process.env.NEXT_PUBLIC_API_TOKEN;
+  if (!token) return url;
+  return url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+}
+
+async function api(path: string) {
+  return fetch(withToken(path));
+}
+
 const MOTES = [
   { left: "10%", size: 5, delay: "0s", duration: "9s" },
   { left: "28%", size: 3, delay: "1.4s", duration: "11s" },
@@ -126,51 +138,74 @@ const MOTES = [
 export default function Page() {
   const [lang, setLang] = useState<LangKey>("en");
   const [query, setQuery] = useState(DEFAULT_QUERY);
-  const [results, setResults] = useState<Track[]>([]);
+  const [queue, setQueue] = useState<Track[]>([]);
+  const [related, setRelated] = useState<Track[]>([]);
   const [index, setIndex] = useState(0);
   const [current, setCurrent] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [shuffleOn, setShuffleOn] = useState(false);
   const [repeatOn, setRepeatOn] = useState(false);
+  const [radioOn, setRadioOn] = useState(false);
   const [volume, setVolume] = useState(70);
+  const [muted, setMuted] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [lyricsOpen, setLyricsOpen] = useState(false);
+  const [lyricsText, setLyricsText] = useState("");
+  const [lyricsBusy, setLyricsBusy] = useState(false);
+  const [sleepMin, setSleepMin] = useState(0);
+  const [sleepLeft, setSleepLeft] = useState(0);
 
   const t = LANGS[lang];
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mountedRef = useRef(false);
+  const initRef = useRef(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const progressRef = useRef<HTMLDivElement | null>(null);
+  const seekingRef = useRef(false);
+  const toastTimer = useRef<number | null>(null);
+  const sleepEndRef = useRef(0);
+
+  function toast(msg: string) {
+    setToastMsg(msg);
+    if (toastTimer.current) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToastMsg(null), 2400);
+  }
 
   async function doSearch(q: string) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=${MAX_RESULTS}`);
+      const res = await api(`/api/search?q=${encodeURIComponent(q)}&limit=${MAX_RESULTS}`);
       if (!res.ok) throw new Error("Search failed — make sure the music server is running (python music_server.py).");
       const data = await res.json();
-      setResults((data.tracks ?? []).slice(0, MAX_RESULTS));
+      const tracks = (data.tracks ?? []).slice(0, MAX_RESULTS);
+      setQueue(tracks);
+      setRelated([]);
       setIndex(0);
+      if (tracks.length > 0) setCurrent(tracks[0]);
+      else setCurrent(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed.");
-      setResults([]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function playTrack(i: number) {
-    const track = results[i];
+  async function playTrack(track: Track, idx: number) {
     if (!track) return;
     setCurrent(track);
-    setIndex(i);
+    setIndex(idx);
     setElapsed(0);
     setError(null);
     setBusy(true);
     try {
-      const res = await fetch(`/api/stream/${track.id}`);
+      const res = await api(`/api/stream/${track.id}`);
       if (!res.ok) {
         let msg = "Could not load audio stream.";
         try {
@@ -184,7 +219,7 @@ export default function Page() {
       const data = await res.json();
       const audio = audioRef.current;
       if (!audio) return;
-      audio.src = `/api/audio/${track.id}`;
+      audio.src = withToken(`/api/audio/${track.id}`);
       audio.currentTime = 0;
       if (data.duration) {
         setCurrent((c) => (c && c.id === track.id ? { ...c, duration: data.duration } : c));
@@ -192,6 +227,67 @@ export default function Page() {
       await audio.play();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Playback failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function addToQueue(tr: Track) {
+    if (queue.some((q) => q.id === tr.id)) {
+      toast("Already in queue");
+      return;
+    }
+    setQueue((q) => [...q, tr]);
+    toast(`Added — ${tr.title}`);
+  }
+
+  function removeFromQueue(id: string) {
+    const idx = queue.findIndex((x) => x.id === id);
+    if (idx === -1) return;
+    const wasCurrent = current?.id === id;
+    const next = queue.filter((x) => x.id !== id);
+    setQueue(next);
+    if (wasCurrent) {
+      const audio = audioRef.current;
+      if (audio) {
+        audio.pause();
+        audio.removeAttribute("src");
+      }
+      setCurrent(null);
+      setIsPlaying(false);
+      setElapsed(0);
+      setIndex(Math.min(idx, Math.max(0, next.length - 1)));
+    } else if (idx < index) {
+      setIndex((i) => Math.max(0, i - 1));
+    }
+  }
+
+  function clearQueue() {
+    const audio = audioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.removeAttribute("src");
+    }
+    setQueue([]);
+    setCurrent(null);
+    setIndex(0);
+    setIsPlaying(false);
+    setElapsed(0);
+    toast("Queue cleared");
+  }
+
+  async function loadSuggestions(id: string) {
+    setBusy(true);
+    try {
+      const res = await api(`/api/related/${id}`);
+      if (!res.ok) throw new Error("related");
+      const d = await res.json();
+      const fresh = (d.tracks ?? []).filter((tr: Track) => !queue.some((q) => q.id === tr.id));
+      setRelated(fresh);
+      if (fresh.length > 0) toast(`${fresh.length} similar — tap + to queue`);
+    } catch {
+      setRelated([]);
+      toast("Could not load related tracks");
     } finally {
       setBusy(false);
     }
@@ -207,29 +303,29 @@ export default function Page() {
   }
 
   function goNext() {
-    if (results.length === 0) return;
+    if (queue.length === 0) return;
     const i = index;
     const n = repeatOn
       ? i
       : shuffleOn
-        ? pickRandomIndex(i, results.length)
-        : (i + 1) % results.length;
-    playTrack(n);
+        ? pickRandomIndex(i, queue.length)
+        : (i + 1) % queue.length;
+    playTrack(queue[n]!, n);
   }
 
   function goPrev() {
-    if (results.length === 0) return;
+    if (queue.length === 0) return;
     const i = index;
-    const n = shuffleOn ? pickRandomIndex(i, results.length) : (i - 1 + results.length) % results.length;
-    playTrack(n);
+    const n = shuffleOn ? pickRandomIndex(i, queue.length) : (i - 1 + queue.length) % queue.length;
+    playTrack(queue[n]!, n);
   }
 
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
-      if (!audio.src && results.length > 0) {
-        playTrack(index);
+      if (!audio.src && queue.length > 0) {
+        playTrack(queue[index]!, index);
         return;
       }
       audio.play().catch(() => {
@@ -237,6 +333,112 @@ export default function Page() {
       });
     } else {
       audio.pause();
+    }
+  }
+
+  async function radioFill() {
+    if (!current) return;
+    try {
+      const res = await api(`/api/related/${current.id}`);
+      if (!res.ok) throw new Error("radio");
+      const d = await res.json();
+      const fresh = (d.tracks ?? []).filter((tr: Track) => !queue.some((q) => q.id === tr.id));
+      if (fresh.length > 0) {
+        const baseIdx = queue.length;
+        setQueue([...queue, ...fresh]);
+        playTrack(fresh[0]!, baseIdx);
+      } else {
+        setIsPlaying(false);
+      }
+    } catch {
+      setIsPlaying(false);
+    }
+  }
+
+  function playEnded() {
+    if (repeatOn) {
+      playTrack(queue[index]!, index);
+      return;
+    }
+    if (index < queue.length - 1) {
+      playTrack(queue[index + 1]!, index + 1);
+      return;
+    }
+    if (radioOn) {
+      radioFill();
+      return;
+    }
+    setIsPlaying(false);
+  }
+
+  function seekToPct(pct: number) {
+    const audio = audioRef.current;
+    if (!audio || !current?.duration) return;
+    audio.currentTime = (pct / 100) * current.duration;
+  }
+
+  function onSeek(e: React.PointerEvent | React.MouseEvent) {
+    const el = progressRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const pct = Math.min(100, Math.max(0, ((e.clientX - rect.left) / rect.width) * 100));
+    seekToPct(pct);
+  }
+
+  function toggleMute() {
+    setMuted((m) => {
+      const next = !m;
+      if (audioRef.current) audioRef.current.muted = next;
+      return next;
+    });
+  }
+
+  function bumpVol(delta: number) {
+    setVolume((v) => Math.max(0, Math.min(100, v + delta)));
+  }
+
+  function selectSleep(min: number) {
+    setSleepMin(min);
+    sleepEndRef.current = min ? Date.now() + min * 60000 : 0;
+    if (!min) setSleepLeft(0);
+  }
+
+  function cycleSleep() {
+    const idx = SLEEP_OPTS.indexOf(sleepMin);
+    const next = SLEEP_OPTS[(idx + 1) % SLEEP_OPTS.length]!;
+    selectSleep(next);
+    if (next) toast(`Sleep in ${next}m`);
+  }
+
+  async function openLyrics() {
+    if (!current) return;
+    setLyricsBusy(true);
+    setLyricsOpen(true);
+    setLyricsText("");
+    try {
+      const res = await api(`/api/lyrics/${current.id}`);
+      if (!res.ok) throw new Error("no lyrics");
+      const d = await res.json();
+      setLyricsText(d.lyrics || "");
+    } catch {
+      setLyricsText("No lyrics available for this track.");
+    } finally {
+      setLyricsBusy(false);
+    }
+  }
+
+  async function shareTrack() {
+    if (!current) return;
+    const url = `${window.location.origin}${window.location.pathname}?track=${current.id}`;
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ title: current.title, text: `${current.title} — ${current.artist}`, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        toast("Link copied");
+      }
+    } catch {
+      /* share cancelled */
     }
   }
 
@@ -269,13 +471,154 @@ export default function Page() {
 
   useEffect(() => {
     const audio = audioRef.current;
-    if (audio) audio.volume = volume / 100;
+    if (audio) {
+      audio.volume = muted ? 0 : volume / 100;
+      audio.muted = muted;
+    }
+  }, [volume, muted]);
+
+  useEffect(() => {
+    localStorage.setItem("wakemon-volume", String(volume));
   }, [volume]);
 
   useEffect(() => {
-    doSearch(DEFAULT_QUERY);
+    if (!initRef.current) return;
+    localStorage.setItem("wakemon-queue", JSON.stringify(queue));
+  }, [queue]);
+
+  useEffect(() => {
+    const savedVol = localStorage.getItem("wakemon-volume");
+    if (savedVol) {
+      const n = Number(savedVol);
+      if (!Number.isNaN(n)) setVolume(Math.max(0, Math.min(100, n)));
+    }
+    let saved: Track[] = [];
+    try {
+      const raw = localStorage.getItem("wakemon-queue");
+      if (raw) {
+        const arr = JSON.parse(raw) as Track[];
+        if (Array.isArray(arr) && arr.length > 0 && arr[0]?.id) saved = arr;
+      }
+    } catch {
+      /* ignore */
+    }
+    if (saved.length > 0) {
+      setQueue(saved);
+      setCurrent(saved[0]!);
+    } else {
+      doSearch(DEFAULT_QUERY);
+    }
+    initRef.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator)) return;
+    if (!current) return;
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: current.title,
+      artist: current.artist,
+      album: "WAKEMON radio",
+      artwork: current.thumbnail ? [{ src: current.thumbnail, sizes: "512x512", type: "image/jpeg" }] : [],
+    });
+    const safe = (handler: MediaSessionAction, cb: MediaSessionActionHandler) => {
+      try {
+        navigator.mediaSession.setActionHandler(handler, cb);
+      } catch {
+        /* unsupported action */
+      }
+    };
+    safe("play", togglePlay);
+    safe("pause", togglePlay);
+    safe("previoustrack", goPrev);
+    safe("nexttrack", goNext);
+    safe("seekto", (d) => {
+      if (d.seekTime != null && audioRef.current) audioRef.current.currentTime = d.seekTime;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current]);
+
+  useEffect(() => {
+    if (!("mediaSession" in navigator) || !current?.duration) return;
+    try {
+      navigator.mediaSession.setPositionState?.({
+        duration: current.duration,
+        position: Math.min(elapsed, current.duration),
+        playbackRate: 1,
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [elapsed, current]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        if (e.key === "Escape") {
+          target.blur();
+          setLangOpen(false);
+        }
+        return;
+      }
+      switch (e.key) {
+        case " ":
+          e.preventDefault();
+          togglePlay();
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          goNext();
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          goPrev();
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          bumpVol(5);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          bumpVol(-5);
+          break;
+        case "/":
+          e.preventDefault();
+          searchRef.current?.focus();
+          break;
+        case "s":
+        case "S":
+          setShuffleOn((v) => !v);
+          break;
+        case "r":
+        case "R":
+          setRepeatOn((v) => !v);
+          break;
+        case "m":
+        case "M":
+          toggleMute();
+          break;
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  useEffect(() => {
+    if (!sleepMin) return;
+    const id = window.setInterval(() => {
+      const left = Math.round((sleepEndRef.current - Date.now()) / 1000);
+      setSleepLeft(Math.max(0, left));
+      if (left <= 0) {
+        window.clearInterval(id);
+        audioRef.current?.pause();
+        setSleepMin(0);
+        setSleepLeft(0);
+        toast("Sleep timer finished");
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [sleepMin]);
 
   const progressPct = useMemo(() => {
     if (!current || current.duration <= 0) return 0;
@@ -374,6 +717,7 @@ export default function Page() {
         <section className="window">
           <div className="platter" aria-hidden="true">
             <div className={"vinyl" + (isPlaying ? " spinning" : "")}>
+              {current?.thumbnail ? <img className="vinylArt" src={current.thumbnail} alt="" /> : null}
               <div className="vinylLabel">
                 <span className="vinylLabelText">WK</span>
               </div>
@@ -393,15 +737,61 @@ export default function Page() {
             <div className={"marquee" + (isPlaying ? " scrolling" : "")}>{marqueeText}</div>
           </div>
 
+          <div className="actionsRow">
+            <button className="actBtn" onClick={openLyrics} disabled={!current}>
+              LYRICS
+            </button>
+            <button className="actBtn" onClick={shareTrack} disabled={!current}>
+              SHARE
+            </button>
+            <a
+              className="actBtn"
+              href={current ? withToken(`/api/audio/${current.id}?download=1`) : undefined}
+              download
+              aria-disabled={!current}
+              onClick={(e) => {
+                if (!current) e.preventDefault();
+              }}
+            >
+              DOWNLOAD
+            </a>
+            <button
+              className={"actBtn" + (radioOn ? " on" : "")}
+              onClick={() => setRadioOn((v) => !v)}
+              disabled={!current}
+              title="Keep playing similar tracks when the queue ends"
+            >
+              RADIO
+            </button>
+            <button className="actBtn" onClick={() => current && loadSuggestions(current.id)} disabled={!current}>
+              SIMILAR
+            </button>
+          </div>
+
           <div className="progressRow">
             <span className="time">{current ? formatTime(elapsed) : "--:--"}</span>
             <div
+              ref={progressRef}
               className="progressTrack"
               role="slider"
               aria-label="Playback position"
               aria-valuemin={0}
               aria-valuemax={current?.duration || 0}
               aria-valuenow={Math.floor(elapsed)}
+              onClick={onSeek}
+              onPointerDown={(e) => {
+                seekingRef.current = true;
+                onSeek(e);
+              }}
+              onPointerMove={(e) => {
+                if (seekingRef.current) onSeek(e);
+              }}
+              onPointerUp={() => {
+                seekingRef.current = false;
+              }}
+              onPointerLeave={() => {
+                seekingRef.current = false;
+              }}
             >
               <div className="progressFill" style={{ width: `${progressPct}%` }} />
               <div className="progressHead" style={{ left: `${progressPct}%` }} />
@@ -416,7 +806,7 @@ export default function Page() {
             onClick={() => setShuffleOn((v) => !v)}
             aria-pressed={shuffleOn}
             title={t.shuffle}
-            disabled={results.length === 0}
+            disabled={queue.length === 0}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
@@ -430,18 +820,13 @@ export default function Page() {
           </button>
 
           <div className="transport">
-            <button className="transportBtn" onClick={goPrev} aria-label={t.prev} disabled={results.length === 0}>
+            <button className="transportBtn" onClick={goPrev} aria-label={t.prev} disabled={queue.length === 0}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M6 5h2v14H6zM19 6l-9 6 9 6z" />
               </svg>
             </button>
 
-            <button
-              className="playBtn"
-              onClick={togglePlay}
-              aria-label={isPlaying ? t.pause : t.play}
-              disabled={busy}
-            >
+            <button className="playBtn" onClick={togglePlay} aria-label={isPlaying ? t.pause : t.play} disabled={busy}>
               {busy ? (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                   <circle cx="12" cy="12" r="2.2" fill="currentColor" />
@@ -459,7 +844,7 @@ export default function Page() {
               )}
             </button>
 
-            <button className="transportBtn" onClick={goNext} aria-label={t.next} disabled={results.length === 0}>
+            <button className="transportBtn" onClick={goNext} aria-label={t.next} disabled={queue.length === 0}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path d="M16 5h2v14h-2zM5 6l9 6-9 6z" />
               </svg>
@@ -471,7 +856,7 @@ export default function Page() {
             onClick={() => setRepeatOn((v) => !v)}
             aria-pressed={repeatOn}
             title={t.repeat}
-            disabled={results.length === 0}
+            disabled={queue.length === 0}
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
@@ -492,17 +877,39 @@ export default function Page() {
             type="range"
             min={0}
             max={100}
-            value={volume}
-            onChange={(e) => setVolume(Number(e.target.value))}
+            value={muted ? 0 : volume}
+            onChange={(e) => {
+              setMuted(false);
+              if (audioRef.current) audioRef.current.muted = false;
+              setVolume(Number(e.target.value));
+            }}
             aria-label={t.vol}
           />
-          <span className="volValue">{volume}</span>
+          <span className="volValue">{muted ? "M" : volume}</span>
+          <button className={"actBtn sleep" + (sleepMin ? " on" : "")} onClick={cycleSleep} title="Sleep timer">
+            {sleepMin ? `SLEEP ${sleepMin}m` : "SLEEP"}
+          </button>
         </section>
 
         <section className="tracklist">
           <div className="eyebrow">{t.search}</div>
+          <div className="chips">
+            {GENRES.map((g) => (
+              <button
+                key={g}
+                className={"chip" + (query === g ? " on" : "")}
+                onClick={() => {
+                  setQuery(g);
+                  doSearch(g);
+                }}
+              >
+                {g}
+              </button>
+            ))}
+          </div>
           <form className="searchForm" onSubmit={submitSearch} role="search">
             <input
+              ref={searchRef}
               className="searchInput"
               type="text"
               value={query}
@@ -521,30 +928,93 @@ export default function Page() {
             </div>
           )}
 
+          <div className="sectionRow">
+            <span className="upNext">
+              UP NEXT <span className="qCount">{queue.length}</span>
+            </span>
+            <button className="clearBtn" onClick={clearQueue} disabled={queue.length === 0}>
+              CLEAR
+            </button>
+          </div>
+
           <ol>
-            {results.map((tr, i) => (
-              <li key={tr.id}>
-                <button
-                  className={"trackRow" + (i === index ? " active" : "")}
-                  onClick={() => playTrack(i)}
-                >
-                  <span className="trackIndex">{(i + 1).toString().padStart(2, "0")}</span>
-                  <span className="trackNames">
-                    <span className="trackTitle">{tr.title}</span>
-                    <span className="trackArtist">{tr.artist}</span>
-                  </span>
-                  <span className="trackDur">
-                    {i === index && current && isPlaying ? "▶" : formatTime(tr.duration)}
-                  </span>
-                </button>
+            {queue.map((tr, i) => (
+              <li key={tr.id + "_" + i}>
+                <div className="qRow">
+                  <button
+                    className={"trackRow" + (i === index && current?.id === tr.id ? " active" : "")}
+                    onClick={() => playTrack(tr, i)}
+                  >
+                    <span className="trackIndex">{(i + 1).toString().padStart(2, "0")}</span>
+                    <span className="trackNames">
+                      <span className="trackTitle">{tr.title}</span>
+                      <span className="trackArtist">{tr.artist}</span>
+                    </span>
+                    <span className="trackDur">
+                      {current?.id === tr.id && isPlaying ? "▶" : formatTime(tr.duration)}
+                    </span>
+                  </button>
+                  <button
+                    className="qBtn"
+                    onClick={() => removeFromQueue(tr.id)}
+                    aria-label="Remove from queue"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
               </li>
             ))}
-            {!loading && results.length === 0 && !error && (
-              <li className="hint">{t.noResults}</li>
-            )}
+            {!loading && queue.length === 0 && !error && <li className="hint">{t.noResults}</li>}
           </ol>
+
+          {related.length > 0 && (
+            <>
+              <div className="sectionRow sectHead">
+                <span className="upNext">SUGGESTED</span>
+                <button className="clearBtn" onClick={() => setRelated([])}>
+                  HIDE
+                </button>
+              </div>
+              <ol className="suggestList">
+                {related.map((tr) => (
+                  <li key={tr.id}>
+                    <div className="qRow">
+                      <button className="trackRow" onClick={() => addToQueue(tr)}>
+                        <span className="trackIndex">+</span>
+                        <span className="trackNames">
+                          <span className="trackTitle">{tr.title}</span>
+                          <span className="trackArtist">{tr.artist}</span>
+                        </span>
+                        <span className="trackDur">{formatTime(tr.duration)}</span>
+                      </button>
+                      <button className="qBtn on" onClick={() => addToQueue(tr)} aria-label="Add to queue" title="Add">
+                        +
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
         </section>
       </div>
+
+      {toastMsg && <div className="toast" role="status">{toastMsg}</div>}
+
+      {lyricsOpen && (
+        <div className="lyricsPanel" role="dialog" aria-label="Lyrics">
+          <div className="lyricsHead">
+            <span className="lyricsTitle">{current?.title || "Lyrics"}</span>
+            <button className="qBtn" onClick={() => setLyricsOpen(false)} aria-label="Close lyrics">
+              ×
+            </button>
+          </div>
+          <div className="lyricsBody">
+            {lyricsBusy ? <span className="hint">Loading…</span> : lyricsText || <span className="hint">—</span>}
+          </div>
+        </div>
+      )}
 
       <audio
         ref={audioRef}
@@ -552,7 +1022,11 @@ export default function Page() {
         onTimeUpdate={(e) => setElapsed(e.currentTarget.currentTime)}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onEnded={goNext}
+        onEnded={playEnded}
+        onError={() => {
+          setBusy(false);
+          toast("Stream failed — try another track");
+        }}
       />
 
       <style jsx>{`
@@ -608,6 +1082,7 @@ export default function Page() {
         }
 
         .device {
+          position: relative;
           width: 100%;
           max-width: 400px;
           background: linear-gradient(180deg, var(--panel-raised), var(--panel));
@@ -775,6 +1250,17 @@ export default function Page() {
           justify-content: center;
         }
 
+        .vinylArt {
+          position: absolute;
+          inset: 12px;
+          width: calc(100% - 24px);
+          height: calc(100% - 24px);
+          object-fit: cover;
+          border-radius: 50%;
+          opacity: 0.92;
+          box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.35);
+        }
+
         .vinyl.spinning {
           animation: spin 3.4s linear infinite;
         }
@@ -927,6 +1413,46 @@ export default function Page() {
           }
         }
 
+        .actionsRow {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin: 10px 0 4px;
+          flex-wrap: wrap;
+        }
+
+        .actBtn {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          background: var(--panel);
+          border: 1px solid var(--seam);
+          color: var(--cream-dim);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.1em;
+          padding: 5px 9px;
+          border-radius: 999px;
+          cursor: pointer;
+          text-decoration: none;
+        }
+
+        .actBtn:hover:not(:disabled) {
+          color: var(--cream);
+          border-color: var(--amber-deep);
+        }
+
+        .actBtn:disabled {
+          opacity: 0.4;
+          cursor: default;
+        }
+
+        .actBtn.on {
+          color: var(--amber);
+          border-color: var(--amber-deep);
+          background: var(--accent-tint);
+        }
+
         .progressRow {
           display: flex;
           align-items: center;
@@ -947,6 +1473,8 @@ export default function Page() {
           height: 4px;
           background: var(--seam);
           border-radius: 999px;
+          cursor: pointer;
+          touch-action: none;
         }
 
         .progressFill {
@@ -1059,6 +1587,10 @@ export default function Page() {
           text-align: right;
         }
 
+        .actBtn.sleep {
+          flex-shrink: 0;
+        }
+
         .volSlider {
           flex: 1;
           -webkit-appearance: none;
@@ -1102,54 +1634,206 @@ export default function Page() {
           overflow-y: auto;
         }
 
+        .tracklist ol.suggestList {
+          border-top: 1px dashed var(--seam);
+          margin-top: 8px;
+        }
+
         .searchForm {
           display: flex;
           gap: 8px;
         }
 
-        .searchInput {
-          flex: 1;
-          min-width: 0;
-          background: var(--panel);
-          border: 1px solid var(--seam);
-          border-radius: 999px;
-          padding: 9px 14px;
-          color: var(--cream);
-          font-family: var(--font-body);
-          font-size: 13px;
-          font-weight: 500;
-          outline: none;
+        .chips {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin: 0 0 10px;
         }
 
-        .searchInput::placeholder {
+        .chip {
+          background: var(--panel);
+          border: 1px solid var(--seam);
           color: var(--cream-faint);
-        }
-
-        .searchInput:focus {
-          border-color: var(--amber-deep);
-        }
-
-        .searchBtn {
-          flex-shrink: 0;
-          background: var(--panel);
-          border: 1px solid var(--seam);
-          color: var(--cream-dim);
           font-family: var(--font-mono);
           font-size: 10px;
-          letter-spacing: 0.1em;
-          padding: 0 16px;
+          letter-spacing: 0.06em;
+          padding: 5px 10px;
           border-radius: 999px;
           cursor: pointer;
         }
 
-        .searchBtn:hover:not(:disabled) {
+        .chip:hover {
           color: var(--cream);
           border-color: var(--amber-deep);
         }
 
-        .searchBtn:disabled {
-          opacity: 0.5;
+        .chip.on {
+          color: var(--amber);
+          border-color: var(--amber-deep);
+          background: var(--accent-tint);
+        }
+
+        .sectionRow {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin: 14px 0 4px;
+        }
+
+        .upNext {
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.14em;
+          color: var(--amber);
+          text-transform: uppercase;
+        }
+
+        .qCount {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          min-width: 16px;
+          height: 16px;
+          padding: 0 4px;
+          border-radius: 999px;
+          background: var(--accent-tint);
+          color: var(--amber);
+          font-size: 9px;
+          margin-left: 4px;
+        }
+
+        .clearBtn {
+          background: none;
+          border: none;
+          color: var(--cream-faint);
+          font-family: var(--font-mono);
+          font-size: 9px;
+          letter-spacing: 0.1em;
+          cursor: pointer;
+        }
+
+        .clearBtn:hover:not(:disabled) {
+          color: var(--cream);
+        }
+
+        .clearBtn:disabled {
+          opacity: 0.4;
           cursor: default;
+        }
+
+        .qRow {
+          display: flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .qRow .trackRow {
+          flex: 1;
+          min-width: 0;
+        }
+
+        .qBtn {
+          width: 26px;
+          height: 26px;
+          flex-shrink: 0;
+          border-radius: 50%;
+          background: var(--panel);
+          border: 1px solid var(--seam);
+          color: var(--cream-faint);
+          font-size: 14px;
+          line-height: 1;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .qBtn:hover {
+          color: var(--cream);
+          border-color: var(--amber-deep);
+        }
+
+        .qBtn.on {
+          color: var(--amber);
+          border-color: var(--amber-deep);
+        }
+
+        .toast {
+          position: fixed;
+          left: 50%;
+          bottom: 26px;
+          transform: translateX(-50%);
+          background: var(--panel-raised);
+          border: 1px solid var(--amber-deep);
+          color: var(--cream);
+          font-family: var(--font-mono);
+          font-size: 10px;
+          letter-spacing: 0.05em;
+          padding: 7px 14px;
+          border-radius: 999px;
+          box-shadow: 0 14px 30px -10px rgba(0, 0, 0, 0.7);
+          z-index: 30;
+          white-space: nowrap;
+          max-width: 90vw;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          animation: toastIn 0.18s ease-out;
+        }
+
+        @keyframes toastIn {
+          from {
+            opacity: 0;
+            transform: translate(-50%, 6px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
+        }
+
+        .lyricsPanel {
+          position: fixed;
+          inset: 0;
+          margin: auto;
+          width: 100%;
+          max-width: 400px;
+          height: 100%;
+          background: var(--window-bg);
+          border-radius: 0;
+          z-index: 25;
+          display: flex;
+          flex-direction: column;
+          padding: 20px;
+          box-shadow: 0 0 0 1px var(--seam);
+        }
+
+        .lyricsHead {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 12px;
+        }
+
+        .lyricsTitle {
+          font-family: var(--font-display);
+          font-weight: 600;
+          font-size: 13px;
+          color: var(--cream);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          margin-right: 12px;
+        }
+
+        .lyricsBody {
+          flex: 1;
+          overflow-y: auto;
+          font-family: var(--font-mono);
+          font-size: 11px;
+          line-height: 1.8;
+          color: var(--cream-dim);
+          white-space: pre-wrap;
         }
 
         .hint {
@@ -1237,6 +1921,18 @@ export default function Page() {
           .device {
             padding: 20px 16px 16px;
             border-radius: 22px;
+          }
+
+          .lyricsPanel {
+            border-radius: 0;
+          }
+        }
+
+        @media (min-width: 421px) {
+          .lyricsPanel {
+            max-height: 80vh;
+            height: auto;
+            border-radius: 24px;
           }
         }
       `}</style>

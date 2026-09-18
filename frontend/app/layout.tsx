@@ -25,6 +25,16 @@ export default function RootLayout({
             __html: `(function(){var t;try{t=localStorage.getItem("wakemon-theme")}catch(e){}if(t!=="dark"&&t!=="light"){t=window.matchMedia&&window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}document.documentElement.setAttribute("data-theme",t)})()`,
           }}
         />
+        <meta name="theme-color" content="#12100c" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, viewport-fit=cover"
+        />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if("serviceWorker" in navigator){addEventListener("load",function(){navigator.serviceWorker.register("/sw.js").catch(function(){})})}`,
+          }}
+        />
       </head>
       <body>{children}</body>
     </html>

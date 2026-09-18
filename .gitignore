@@ -42,6 +42,9 @@ env/
 # ytmusicapi auth — contains credentials, never commit
 headers_auth.json
 
+# yt-dlp cookies — contains credentials, never commit
+cookies.txt
+
 # editor
 .vscode/
 .idea/
