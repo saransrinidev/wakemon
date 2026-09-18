@@ -224,44 +224,70 @@ def _resolve_with_ytdlp(video_id: str) -> tuple[str, str, int]:
             "yt-dlp is not installed. Run: pip install -r requirements.txt",
         ) from exc
 
-    format_selector = "bestaudio/(best)"
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "format": format_selector,
-        "youtube_include_dash_manifest": False,
-    }
     cookies_file = (
         _COOKIES_FILE
         or os.environ.get("YTDLP_COOKIES")
         or os.environ.get("COOKIES_FILE")
     )
-    if cookies_file and os.path.exists(cookies_file):
-        opts["cookiefile"] = cookies_file
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=False)
-    except DownloadError as exc:
-        msg = str(exc)
-        if any(marker in msg for marker in ("Sign in to confirm", "not a bot", "LOGIN_REQUIRED", "HTTP Error 403")):
-            raise HTTPException(
-                502,
-                "YouTube blocked this request as a bot. Fix it by authenticating:\n"
-                "  1. Export a Netscape cookies.txt from a logged-in YouTube account and set "
-                "YTDLP_COOKIES_CONTENT to its contents (raw or base64) — recommended for cloud "
-                "hosts like Railway, OR\n"
-                "  2. Point YTDLP_COOKIES at an existing cookies.txt file on disk, OR\n"
-                "  3. Run 'ytmusicapi setup' in backend/ to create headers_auth.json.",
-            ) from exc
-        raise HTTPException(502, f"Could not resolve an audio stream: {msg}") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(502, f"Could not resolve an audio stream: {exc}") from exc
+    have_cookies = bool(cookies_file and os.path.exists(cookies_file))
 
-    url = info.get("url")
-    if not url:
-        raise HTTPException(404, "No playable audio stream found for this track.")
-    return url, info.get("title") or "Song", int(info.get("duration") or 0)
+    def _base_opts(client: str) -> dict:
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "bestaudio/best",
+            "youtube_include_dash_manifest": False,
+            "extractor_args": {"youtube": {"player_client": [client]}},
+        }
+        if have_cookies:
+            opts["cookiefile"] = cookies_file
+        return opts
+
+    # YouTube frequently rejects the default player client (especially when an
+    # account cookie is attached, which forces the "tv_downgraded" client and
+    # yields "The page needs to be reloaded" / UNPLAYABLE). Trying a sequence of
+    # clients is the standard workaround. Order matters: the mobile/tv clients
+    # tend to return direct audio URLs without SABR/PO-token requirements.
+    client_order = ["android_vr", "android", "ios", "mweb", "tv", "web_safari", "web"]
+
+    bot_markers = ("Sign in to confirm", "not a bot", "LOGIN_REQUIRED", "HTTP Error 403")
+    last_error: str | None = None
+
+    for client in client_order:
+        try:
+            with yt_dlp.YoutubeDL(_base_opts(client)) as ydl:
+                info = ydl.extract_info(
+                    f"https://music.youtube.com/watch?v={video_id}", download=False
+                )
+        except DownloadError as exc:
+            last_error = str(exc)
+            if any(marker in last_error for marker in bot_markers):
+                raise HTTPException(
+                    502,
+                    "YouTube blocked this request as a bot. Fix it by authenticating:\n"
+                    "  1. Export a Netscape cookies.txt from a logged-in YouTube account and set "
+                    "YTDLP_COOKIES_CONTENT to its contents (raw or base64) — recommended for cloud "
+                    "hosts like Railway, OR\n"
+                    "  2. Point YTDLP_COOKIES at an existing cookies.txt file on disk, OR\n"
+                    "  3. Run 'ytmusicapi setup' in backend/ to create headers_auth.json.",
+                ) from exc
+            continue  # try the next player client
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+            continue
+
+        url = info.get("url")
+        if url:
+            return url, info.get("title") or "Song", int(info.get("duration") or 0)
+        last_error = "No playable audio stream in response."
+
+    raise HTTPException(
+        502,
+        "Could not resolve an audio stream after trying multiple YouTube clients. "
+        f"Last error: {last_error}. If this persists, yt-dlp may need updating "
+        "(YouTube changes break older versions).",
+    )
 
 
 def _resolve_stream(video_id: str) -> tuple[str, str, str, int]:
