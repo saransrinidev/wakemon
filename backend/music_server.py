@@ -232,17 +232,56 @@ def _resolve_with_ytdlp(video_id: str) -> tuple[str, str, int]:
     have_cookies = bool(cookies_file and os.path.exists(cookies_file))
 
     def _base_opts(client: str) -> dict:
+        # Deliberately no "format" key: letting yt-dlp pre-select a format makes
+        # it raise "Requested format is not available" when YouTube returns only
+        # SABR/URL-less audio formats. We extract everything and pick a format
+        # with a usable URL ourselves in _pick_audio_format below.
+        # "formats": ["missing_pot"] keeps formats that lack a PO token instead
+        # of silently discarding them.
         opts = {
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
-            "format": "bestaudio/best",
-            "youtube_include_dash_manifest": False,
-            "extractor_args": {"youtube": {"player_client": [client]}},
+            "ignore_no_formats_error": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [client],
+                    "formats": ["missing_pot"],
+                }
+            },
         }
         if have_cookies:
             opts["cookiefile"] = cookies_file
         return opts
+
+    def _pick_audio_format(info: dict) -> str | None:
+        """Return the best audio URL from an extracted info dict, or None."""
+        if not info:
+            return None
+        # A top-level url means yt-dlp already resolved a single stream.
+        if info.get("url"):
+            return info["url"]
+
+        formats = info.get("formats") or []
+        usable = [f for f in formats if f.get("url")]
+        if not usable:
+            return None
+
+        def is_audio_only(f: dict) -> bool:
+            return f.get("acodec") not in (None, "none") and f.get("vcodec") in (None, "none")
+
+        def bitrate(f: dict) -> float:
+            return f.get("abr") or f.get("tbr") or 0
+
+        audio_only = [f for f in usable if is_audio_only(f)]
+        if audio_only:
+            return max(audio_only, key=bitrate)["url"]
+
+        # Fall back to anything carrying an audio track.
+        with_audio = [f for f in usable if f.get("acodec") not in (None, "none")]
+        if with_audio:
+            return max(with_audio, key=bitrate)["url"]
+        return None
 
     # YouTube frequently rejects the default player client (especially when an
     # account cookie is attached, which forces the "tv_downgraded" client and
@@ -277,10 +316,10 @@ def _resolve_with_ytdlp(video_id: str) -> tuple[str, str, int]:
             last_error = str(exc)
             continue
 
-        url = info.get("url")
+        url = _pick_audio_format(info)
         if url:
             return url, info.get("title") or "Song", int(info.get("duration") or 0)
-        last_error = "No playable audio stream in response."
+        last_error = f"No audio format with a usable URL from client '{client}'."
 
     raise HTTPException(
         502,
