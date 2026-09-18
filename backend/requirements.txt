@@ -1,7 +1,8 @@
-ytmusicapi>=1.10.0
-# YouTube breaks older yt-dlp releases regularly — keep this current.
-# 2026.8.19 is the version verified working against YouTube Music extraction.
-yt-dlp>=2026.8.19
 fastapi>=0.115.0
 uvicorn>=0.30.0
 requests>=2.31.0
+
+# Only needed when MUSIC_SOURCE=youtube. The default Audius source does not use
+# these. YouTube breaks older yt-dlp releases regularly, so keep this current.
+ytmusicapi>=1.10.0
+yt-dlp>=2026.8.19
